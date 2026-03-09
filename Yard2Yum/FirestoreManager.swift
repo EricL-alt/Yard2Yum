@@ -7,6 +7,7 @@
 
 import Foundation
 import FirebaseFirestore
+import Combine
 
 struct UserProfile: Codable {
     var userID: String
@@ -42,7 +43,6 @@ struct UserProfile: Codable {
     }
 }
 
-@MainActor
 class FirestoreManager: ObservableObject {
     private let db = Firestore.firestore()
     
