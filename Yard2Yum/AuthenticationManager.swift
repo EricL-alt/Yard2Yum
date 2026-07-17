@@ -7,10 +7,47 @@
 
 import Foundation
 import FirebaseAuth
+import FirebaseFirestore
 import Combine
 
 @MainActor
 class AuthenticationManager: ObservableObject {
+
+    // MARK: - Error Translation
+    // Firebase surfaces cryptic strings like "The supplied auth credential is
+    // malformed or has expired" for plain wrong-password sign-ins (email
+    // enumeration protection collapses wrongPassword/userNotFound into
+    // invalidCredential). Translate the common codes before showing them.
+    nonisolated static func friendlyMessage(for error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == AuthErrorDomain, let code = AuthErrorCode(rawValue: nsError.code) {
+            switch code {
+            case .invalidCredential, .wrongPassword, .userNotFound:
+                return "Incorrect email or password. Please try again."
+            case .invalidEmail:
+                return "That email address isn't valid."
+            case .emailAlreadyInUse:
+                return "An account with this email already exists. Try signing in instead."
+            case .weakPassword:
+                return "Password is too weak — use at least 6 characters."
+            case .userDisabled:
+                return "This account has been disabled."
+            case .tooManyRequests:
+                return "Too many attempts. Please wait a moment and try again."
+            case .networkError:
+                return "Network error. Check your connection and try again."
+            case .userTokenExpired, .invalidUserToken:
+                return "Your session has expired. Please sign in again."
+            default:
+                return error.localizedDescription
+            }
+        }
+        if nsError.domain == FirestoreErrorDomain,
+           nsError.code == FirestoreErrorCode.permissionDenied.rawValue {
+            return "Couldn't access your profile data. Please try again later."
+        }
+        return error.localizedDescription
+    }
     @Published var user: User?
     @Published var isAuthenticated = false
     @Published var errorMessage: String?
@@ -50,7 +87,7 @@ class AuthenticationManager: ObservableObject {
             self.isAuthenticated = true
             self.errorMessage = nil
         } catch {
-            self.errorMessage = error.localizedDescription
+            self.errorMessage = Self.friendlyMessage(for: error)
             throw error
         }
     }
@@ -63,7 +100,7 @@ class AuthenticationManager: ObservableObject {
             self.isAuthenticated = true
             self.errorMessage = nil
         } catch {
-            self.errorMessage = error.localizedDescription
+            self.errorMessage = Self.friendlyMessage(for: error)
             throw error
         }
     }
@@ -76,7 +113,7 @@ class AuthenticationManager: ObservableObject {
             self.isAuthenticated = false
             self.errorMessage = nil
         } catch {
-            self.errorMessage = error.localizedDescription
+            self.errorMessage = Self.friendlyMessage(for: error)
             throw error
         }
     }
@@ -87,7 +124,7 @@ class AuthenticationManager: ObservableObject {
             try await Auth.auth().sendPasswordReset(withEmail: email)
             self.errorMessage = nil
         } catch {
-            self.errorMessage = error.localizedDescription
+            self.errorMessage = Self.friendlyMessage(for: error)
             throw error
         }
     }
@@ -104,7 +141,7 @@ class AuthenticationManager: ObservableObject {
             self.isAuthenticated = false
             self.errorMessage = nil
         } catch {
-            self.errorMessage = error.localizedDescription
+            self.errorMessage = Self.friendlyMessage(for: error)
             throw error
         }
     }

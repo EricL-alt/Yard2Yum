@@ -319,6 +319,7 @@ struct AuthenticationView: View {
     @State private var showForgotPassword = false
     @State private var resetEmail = ""
     @State private var showResetSuccess = false
+    @State private var needsProfileRecovery = false
     
     private func isValidEmail(_ email: String) -> Bool {
         let emailRegex = "^[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
@@ -450,12 +451,62 @@ struct AuthenticationView: View {
                             isLoading = false
                         }
                     } else {
-                        throw NSError(domain: "ProfileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "User profile not found"])
+                        // Auth account exists but the Firestore profile doc is missing
+                        // (e.g. sign-ups made while the database rules were expired).
+                        // Let the user pick their type and rebuild it instead of failing.
+                        await MainActor.run {
+                            needsProfileRecovery = true
+                            errorMessage = nil
+                            isLoading = false
+                        }
                     }
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = error.localizedDescription
+                    errorMessage = AuthenticationManager.friendlyMessage(for: error)
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func handleProfileRecovery() {
+        guard let selectedType = selectedType else {
+            errorMessage = "Please select a user type."
+            return
+        }
+        guard let user = authManager.user else {
+            errorMessage = "Your session ended. Please sign in again."
+            needsProfileRecovery = false
+            return
+        }
+
+        isLoading = true
+        errorMessage = nil
+
+        Task {
+            do {
+                let profile = UserProfile(
+                    userID: user.uid,
+                    username: user.displayName ?? "",
+                    email: user.email ?? email,
+                    userType: selectedType.rawValue
+                )
+                try await firestoreManager.createUserProfile(profile)
+
+                await MainActor.run {
+                    appState.username = profile.username
+                    appState.email = profile.email
+                    appState.userID = profile.userID
+                    appState.selectedUserType = selectedType
+                    appState.showOnboarding = true
+                    appState.isLoggedIn = true
+                    needsProfileRecovery = false
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = AuthenticationManager.friendlyMessage(for: error)
                     isLoading = false
                 }
             }
@@ -490,13 +541,13 @@ struct AuthenticationView: View {
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = error.localizedDescription
+                    errorMessage = AuthenticationManager.friendlyMessage(for: error)
                     isLoading = false
                 }
             }
         }
     }
-    
+
     var body: some View {
         ZStack {
             Color.y2yBackground.ignoresSafeArea()
@@ -522,6 +573,7 @@ struct AuthenticationView: View {
                             withAnimation(.spring(response: 0.3)) {
                                 isSignUp = false
                                 errorMessage = nil
+                                needsProfileRecovery = false
                             }
                         } label: {
                             Text("Sign In")
@@ -537,6 +589,7 @@ struct AuthenticationView: View {
                             withAnimation(.spring(response: 0.3)) {
                                 isSignUp = true
                                 errorMessage = nil
+                                needsProfileRecovery = false
                             }
                         } label: {
                             Text("Sign Up")
@@ -571,8 +624,17 @@ struct AuthenticationView: View {
                     }
                     .padding(.horizontal, 24)
                     
-                    // User Type Selection (Sign Up Only)
-                    if isSignUp {
+                    // Profile recovery notice (account exists, profile doc missing)
+                    if needsProfileRecovery {
+                        Text("You're signed in, but your profile setup wasn't finished. Choose your account type below to continue.")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundColor(Color.y2yAccent)
+                            .padding(.horizontal, 24)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    // User Type Selection (Sign Up or profile recovery)
+                    if isSignUp || needsProfileRecovery {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("I AM A...")
                                 .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -599,14 +661,18 @@ struct AuthenticationView: View {
                     
                     // Submit Button
                     Button {
-                        handleAuthentication()
+                        if needsProfileRecovery {
+                            handleProfileRecovery()
+                        } else {
+                            handleAuthentication()
+                        }
                     } label: {
                         HStack(spacing: 8) {
                             if isLoading {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle(tint: Color.y2yCard))
                             } else {
-                                Text(isSignUp ? "Create Account" : "Sign In")
+                                Text(needsProfileRecovery ? "Finish Setup" : (isSignUp ? "Create Account" : "Sign In"))
                                     .font(Font.custom("Georgia-Bold", size: 18))
                             }
                         }

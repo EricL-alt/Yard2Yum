@@ -200,7 +200,18 @@ Create a `produceListings` collection for real-time marketplace.
    - Firebase Console → Authentication → Sign-in method
    - Enable "Email/Password"
 
-2. **Set Up Firestore Rules** (for development)
+2. **Set Up Firestore Rules**
+
+   ⚠️ **Test Mode rules expire after 30 days** — once they expire, Firebase
+   denies *every* client request ("Missing or insufficient permissions") until
+   you publish real rules. The rules below never expire and only let each
+   signed-in user access their own profile document. They are version-controlled
+   in [`firestore.rules`](../firestore.rules) at the repo root.
+
+   Publish them either way:
+   - **Console:** Firebase Console → Firestore Database → Rules → paste → Publish
+   - **CLI:** `firebase deploy --only firestore:rules` (uses `firebase.json`)
+
    ```javascript
    rules_version = '2';
    service cloud.firestore {
