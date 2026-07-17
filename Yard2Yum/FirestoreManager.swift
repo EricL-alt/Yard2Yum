@@ -9,11 +9,17 @@ import Foundation
 import FirebaseFirestore
 import Combine
 
-struct UserProfile: Codable {
+struct UserProfile: Codable, Identifiable, Equatable {
+    var id: String { userID }
     var userID: String
     var username: String
     var email: String
     var userType: String // "Restaurant", "Farm", or "Composting Facility"
+    
+    // Address (required for all types)
+    var address: String?
+    var latitude: Double?
+    var longitude: Double?
     
     // Restaurant specific
     var restaurantName: String?
@@ -41,6 +47,24 @@ struct UserProfile: Codable {
         self.createdAt = Date()
         self.updatedAt = Date()
     }
+    
+    // Equatable conformance
+    static func == (lhs: UserProfile, rhs: UserProfile) -> Bool {
+        lhs.userID == rhs.userID &&
+        lhs.username == rhs.username &&
+        lhs.email == rhs.email &&
+        lhs.userType == rhs.userType &&
+        lhs.address == rhs.address &&
+        lhs.latitude == rhs.latitude &&
+        lhs.longitude == rhs.longitude &&
+        lhs.restaurantName == rhs.restaurantName &&
+        lhs.restaurantType == rhs.restaurantType &&
+        lhs.farmName == rhs.farmName &&
+        lhs.farmLocation == rhs.farmLocation &&
+        lhs.facilityName == rhs.facilityName &&
+        lhs.totalDonatedLbs == rhs.totalDonatedLbs &&
+        lhs.totalPoints == rhs.totalPoints
+    }
 }
 
 class FirestoreManager: ObservableObject {
@@ -53,6 +77,9 @@ class FirestoreManager: ObservableObject {
             "username": profile.username,
             "email": profile.email,
             "userType": profile.userType,
+            "address": profile.address ?? "",
+            "latitude": profile.latitude ?? 0,
+            "longitude": profile.longitude ?? 0,
             "restaurantName": profile.restaurantName ?? "",
             "restaurantType": profile.restaurantType ?? "",
             "farmName": profile.farmName ?? "",
@@ -82,6 +109,9 @@ class FirestoreManager: ObservableObject {
         var profile = UserProfile(userID: userID, username: username, email: email, userType: userType)
         
         // Load optional fields
+        profile.address = data["address"] as? String
+        profile.latitude = data["latitude"] as? Double
+        profile.longitude = data["longitude"] as? Double
         profile.restaurantName = data["restaurantName"] as? String
         profile.restaurantType = data["restaurantType"] as? String
         profile.farmName = data["farmName"] as? String
@@ -105,6 +135,9 @@ class FirestoreManager: ObservableObject {
         let data: [String: Any] = [
             "username": profile.username,
             "userType": profile.userType,
+            "address": profile.address ?? "",
+            "latitude": profile.latitude ?? 0,
+            "longitude": profile.longitude ?? 0,
             "restaurantName": profile.restaurantName ?? "",
             "restaurantType": profile.restaurantType ?? "",
             "farmName": profile.farmName ?? "",
@@ -119,27 +152,36 @@ class FirestoreManager: ObservableObject {
     }
     
     // MARK: - Update Restaurant Info
-    func updateRestaurantInfo(userID: String, name: String, type: String) async throws {
+    func updateRestaurantInfo(userID: String, name: String, type: String, address: String, latitude: Double, longitude: Double) async throws {
         try await db.collection("users").document(userID).updateData([
             "restaurantName": name,
             "restaurantType": type,
+            "address": address,
+            "latitude": latitude,
+            "longitude": longitude,
             "updatedAt": Timestamp(date: Date())
         ])
     }
     
     // MARK: - Update Farm Info
-    func updateFarmInfo(userID: String, name: String, location: String) async throws {
+    func updateFarmInfo(userID: String, name: String, location: String, address: String, latitude: Double, longitude: Double) async throws {
         try await db.collection("users").document(userID).updateData([
             "farmName": name,
             "farmLocation": location,
+            "address": address,
+            "latitude": latitude,
+            "longitude": longitude,
             "updatedAt": Timestamp(date: Date())
         ])
     }
     
     // MARK: - Update Facility Info
-    func updateFacilityInfo(userID: String, name: String) async throws {
+    func updateFacilityInfo(userID: String, name: String, address: String, latitude: Double, longitude: Double) async throws {
         try await db.collection("users").document(userID).updateData([
             "facilityName": name,
+            "address": address,
+            "latitude": latitude,
+            "longitude": longitude,
             "updatedAt": Timestamp(date: Date())
         ])
     }
@@ -151,5 +193,37 @@ class FirestoreManager: ObservableObject {
             "totalPoints": totalPoints,
             "updatedAt": Timestamp(date: Date())
         ])
+    }
+    
+    // MARK: - Get All Organizations (for map)
+    func getAllOrganizations() async throws -> [UserProfile] {
+        let snapshot = try await db.collection("users").getDocuments()
+        var profiles: [UserProfile] = []
+        
+        for document in snapshot.documents {
+            let data = document.data()
+            guard let username = data["username"] as? String,
+                  let email = data["email"] as? String,
+                  let userType = data["userType"] as? String,
+                  let address = data["address"] as? String,
+                  let latitude = data["latitude"] as? Double,
+                  let longitude = data["longitude"] as? Double,
+                  !address.isEmpty,
+                  latitude != 0 || longitude != 0 else {
+                continue
+            }
+            
+            var profile = UserProfile(userID: document.documentID, username: username, email: email, userType: userType)
+            profile.address = address
+            profile.latitude = latitude
+            profile.longitude = longitude
+            profile.restaurantName = data["restaurantName"] as? String
+            profile.farmName = data["farmName"] as? String
+            profile.facilityName = data["facilityName"] as? String
+            
+            profiles.append(profile)
+        }
+        
+        return profiles
     }
 }

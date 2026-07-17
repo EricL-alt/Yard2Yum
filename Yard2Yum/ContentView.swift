@@ -4,6 +4,9 @@ import SwiftUI
 import PhotosUI
 import Combine
 import FirebaseAuth
+import UIKit
+import MapKit
+import CoreLocation
 
 extension Color {
     static let y2yBackground = Color(red: 0/255,  green: 77/255, blue: 61/255)
@@ -101,6 +104,9 @@ class AppState: ObservableObject {
     @Published var email           = ""
     @Published var userID          = ""
     @Published var selectedUserType: UserType? = nil
+    @Published var address         = ""
+    @Published var latitude: Double = 0
+    @Published var longitude: Double = 0
     @Published var restaurantName  = ""
     @Published var restaurantType  = ""
     @Published var restaurantImage: UIImage? = nil
@@ -142,6 +148,9 @@ class AppState: ObservableObject {
         email = ""
         userID = ""
         selectedUserType = nil
+        address = ""
+        latitude = 0
+        longitude = 0
         restaurantName = ""
         restaurantType = ""
         restaurantImage = nil
@@ -403,6 +412,9 @@ struct AuthenticationView: View {
                             appState.username = profile.username
                             appState.email = profile.email
                             appState.userID = profile.userID
+                            appState.address = profile.address ?? ""
+                            appState.latitude = profile.latitude ?? 0
+                            appState.longitude = profile.longitude ?? 0
                             
                             // Set user type
                             if let userType = UserType.allCases.first(where: { $0.rawValue == profile.userType }) {
@@ -433,8 +445,8 @@ struct AuthenticationView: View {
                             appState.totalPoints = profile.totalPoints ?? 0
                             
                             appState.isLoggedIn = true
-                            // Show onboarding if profile is incomplete
-                            appState.showOnboarding = !hasCompletedSetup
+                            // Show onboarding if profile is incomplete (including address)
+                            appState.showOnboarding = !hasCompletedSetup || appState.address.isEmpty
                             isLoading = false
                         }
                     } else {
@@ -846,26 +858,320 @@ struct RestaurantFlowView: View {
         }
     }
 }
+// MARK: - Y2Y Organizations Map View
+struct OrganizationAnnotation: Identifiable {
+    let id = UUID()
+    let profile: UserProfile
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: profile.latitude ?? 0, longitude: profile.longitude ?? 0)
+    }
+    var name: String {
+        profile.restaurantName ?? profile.farmName ?? profile.facilityName ?? "Unknown"
+    }
+    var userType: UserType? {
+        UserType.allCases.first { $0.rawValue == profile.userType }
+    }
+}
+
+struct Y2YMapView: View {
+    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var firestoreManager: FirestoreManager
+    @Environment(\.dismiss) var dismiss
+    @State private var organizations: [UserProfile] = []
+    @State private var isLoading = true
+    @State private var selectedOrg: UserProfile? = nil
+    @State private var cameraPosition: MapCameraPosition = .automatic
+    
+    private var mapView: some View {
+        Map(position: $cameraPosition) {
+            // User's location
+            if appState.latitude != 0 || appState.longitude != 0 {
+                userLocationAnnotation
+            }
+            
+            // Other organizations
+            ForEach(filteredOrganizations) { org in
+                organizationAnnotation(for: org)
+            }
+        }
+        .mapStyle(.standard(elevation: .realistic))
+    }
+    
+    private var userLocationAnnotation: some MapContent {
+        Annotation("You", coordinate: CLLocationCoordinate2D(latitude: appState.latitude, longitude: appState.longitude)) {
+            ZStack {
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 20, height: 20)
+                Circle()
+                    .stroke(Color.white, lineWidth: 3)
+                    .frame(width: 20, height: 20)
+            }
+        }
+    }
+    
+    private var filteredOrganizations: [UserProfile] {
+        organizations.filter { org in
+            guard org.userID != appState.userID,
+                  let lat = org.latitude,
+                  let lon = org.longitude else {
+                return false
+            }
+            return lat != 0 || lon != 0
+        }
+    }
+    
+    private func organizationAnnotation(for org: UserProfile) -> some MapContent {
+        let coordinate = CLLocationCoordinate2D(
+            latitude: org.latitude ?? 0,
+            longitude: org.longitude ?? 0
+        )
+        let name = org.restaurantName ?? org.farmName ?? org.facilityName ?? "Organization"
+        
+        return Annotation(name, coordinate: coordinate) {
+            MapPinView(userType: UserType.allCases.first { $0.rawValue == org.userType })
+                .onTapGesture {
+                    selectedOrg = org
+                }
+        }
+    }
+    
+    var body: some View {
+        ZStack {
+            Color.y2yBackground.ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Back")
+                                .font(.system(size: 15, weight: .medium, design: .rounded))
+                        }
+                        .foregroundColor(Color.y2yAccent)
+                    }
+                    Spacer()
+                    Text("Nearby Organizations")
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundColor(Color.y2yTan)
+                    Spacer()
+                    // Placeholder for symmetry
+                    Color.clear.frame(width: 60)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .background(Color.y2yCard)
+                
+                // Map
+                if isLoading {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: Color.y2yAccent))
+                        Text("Loading organizations...")
+                            .font(.system(size: 14, design: .rounded))
+                            .foregroundColor(Color.y2ySubtext)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    mapView
+                }
+                
+                // Selected organization detail card
+                if let org = selectedOrg {
+                    OrganizationDetailCard(profile: org)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(16)
+                }
+            }
+        }
+        .navigationBarHidden(true)
+        .task {
+            await loadOrganizations()
+        }
+    }
+    
+    private func loadOrganizations() async {
+        do {
+            let orgs = try await firestoreManager.getAllOrganizations()
+            await MainActor.run {
+                organizations = orgs
+                isLoading = false
+                
+                // Set initial camera position to user's location
+                if appState.latitude != 0 || appState.longitude != 0 {
+                    cameraPosition = .region(MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: appState.latitude, longitude: appState.longitude),
+                        span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+                    ))
+                }
+            }
+        } catch {
+            print("Error loading organizations: \(error.localizedDescription)")
+            await MainActor.run {
+                isLoading = false
+            }
+        }
+    }
+}
+
+struct MapPinView: View {
+    let userType: UserType?
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(userType?.accentColor ?? Color.gray)
+                .frame(width: 36, height: 36)
+                .shadow(color: Color.black.opacity(0.3), radius: 4, x: 0, y: 2)
+            
+            Image(systemName: userType?.icon ?? "mappin")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(Color.white)
+        }
+    }
+}
+
+struct OrganizationDetailCard: View {
+    let profile: UserProfile
+    
+    var userType: UserType? {
+        UserType.allCases.first { $0.rawValue == profile.userType }
+    }
+    
+    var name: String {
+        profile.restaurantName ?? profile.farmName ?? profile.facilityName ?? "Unknown"
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(userType?.accentColor.opacity(0.2) ?? Color.gray.opacity(0.2))
+                        .frame(width: 50, height: 50)
+                    Image(systemName: userType?.icon ?? "mappin")
+                        .font(.system(size: 22))
+                        .foregroundColor(userType?.accentColor ?? Color.gray)
+                }
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(name)
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundColor(Color.y2yTan)
+                    Text(profile.userType)
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(userType?.accentColor ?? Color.y2ySubtext)
+                }
+                
+                Spacer()
+            }
+            
+            if let address = profile.address, !address.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "mappin.circle.fill")
+                        .foregroundColor(Color.y2ySubtext)
+                        .font(.system(size: 14))
+                    Text(address)
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(Color.y2ySubtext)
+                        .lineLimit(2)
+                }
+            }
+            
+            // Visit Now button
+            if let address = profile.address, !address.isEmpty {
+                Button {
+                    openInMaps(address: address, name: name)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "map.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Visit Now in Maps")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundColor(Color.y2yCard)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(userType?.accentColor ?? Color.y2yAccent)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
+            }
+        }
+        .padding(16)
+        .background(Color.y2yCard)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(color: Color.black.opacity(0.25), radius: 12, x: 0, y: 4)
+    }
+    
+    private func openInMaps(address: String, name: String) {
+        let geocoder = CLGeocoder()
+        geocoder.geocodeAddressString(address) { placemarks, error in
+            if let location = placemarks?.first?.location {
+                let mapItem = MKMapItem(placemark: MKPlacemark(coordinate: location.coordinate))
+                mapItem.name = name
+                mapItem.openInMaps(launchOptions: [
+                    MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDriving
+                ])
+            }
+        }
+    }
+}
+
 struct RestaurantPage1: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var firestoreManager: FirestoreManager
     let onNext: () -> Void
     @State private var selectedPhoto: PhotosPickerItem? = nil
     @State private var isSaving = false
+    @State private var geocodeError: String? = nil
     let types = ["Fine Dining", "Casual", "Fast Casual", "Café", "Bakery", "Food Truck", "Other"]
     
+    private func geocodeAddress() async -> (latitude: Double, longitude: Double)? {
+        let geocoder = CLGeocoder()
+        do {
+            let placemarks = try await geocoder.geocodeAddressString(appState.address)
+            if let location = placemarks.first?.location {
+                return (location.coordinate.latitude, location.coordinate.longitude)
+            }
+        } catch {
+            await MainActor.run {
+                geocodeError = "Unable to find address. Please check and try again."
+            }
+        }
+        return nil
+    }
+    
     private func saveRestaurantInfo() {
-        guard !appState.restaurantName.isEmpty else { return }
+        guard !appState.restaurantName.isEmpty, !appState.address.isEmpty else { return }
         
         isSaving = true
+        geocodeError = nil
+        
         Task {
+            // Geocode address first
+            guard let coordinates = await geocodeAddress() else {
+                await MainActor.run {
+                    isSaving = false
+                }
+                return
+            }
+            
             do {
                 try await firestoreManager.updateRestaurantInfo(
                     userID: appState.userID,
                     name: appState.restaurantName,
-                    type: appState.restaurantType
+                    type: appState.restaurantType,
+                    address: appState.address,
+                    latitude: coordinates.latitude,
+                    longitude: coordinates.longitude
                 )
                 await MainActor.run {
+                    appState.latitude = coordinates.latitude
+                    appState.longitude = coordinates.longitude
                     isSaving = false
                     onNext()
                 }
@@ -911,8 +1217,23 @@ struct RestaurantPage1: View {
                     .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.07), lineWidth: 1))
                 }
             }
+            Y2YInputField(label: "Street Address", placeholder: "e.g. 123 Main St, Springfield, CA 12345", text: $appState.address)
+            
+            if let error = geocodeError {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(Color(red: 1, green: 0.5, blue: 0.45))
+                    Text(error)
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundColor(Color(red: 1, green: 0.5, blue: 0.45))
+                }
+                .padding(12)
+                .background(Color.y2yCard)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            
             Y2YButton(title: isSaving ? "Saving..." : "Next: Schedule Pickup", icon: "arrow.right", action: saveRestaurantInfo)
-                .disabled(appState.restaurantName.isEmpty || isSaving).padding(.top, 4)
+                .disabled(appState.restaurantName.isEmpty || appState.address.isEmpty || isSaving).padding(.top, 4)
         }
         .toolbar { LogoutToolbarItem() }
     }
@@ -925,6 +1246,7 @@ struct RestaurantPage2: View {
     @State private var submitted = false
     @State private var showBadgeUnlock: RestaurantBadge? = nil
     @State private var animatePoints = false
+    @State private var showMap = false
     var levelInfo: (level: Int, title: String) { levelForPoints(appState.totalPoints) }
     var nextLevelPoints: Int {
         switch levelInfo.level {
@@ -1132,9 +1454,26 @@ struct RestaurantPage2: View {
                 .padding(16).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 20))
                 .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.y2yAccent.opacity(0.25), lineWidth: 1))
             }
+            // MARK: - Map CTA
+            Button(action: { showMap = true }) {
+                HStack(spacing: 8) {
+                    Text("🗺️  View Nearby Y2Y Organizations")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundColor(Color.y2yTan)
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundColor(Color.y2yAccent)
+                }
+                .padding(16).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.y2yAccent.opacity(0.25), lineWidth: 1))
+            }
             BackButton(action: onBack)
         }
         .toolbar { LogoutToolbarItem() }
+        .sheet(isPresented: $showMap) {
+            Y2YMapView()
+                .environmentObject(appState)
+                .environmentObject(firestoreManager)
+        }
     }
 }
 // MARK: - Restaurant: Browse Farm Produce Marketplace
@@ -1352,19 +1691,50 @@ struct FarmPage1: View {
     let onNext: () -> Void
     @State private var selectedPhoto: PhotosPickerItem? = nil
     @State private var isSaving = false
+    @State private var geocodeError: String? = nil
+    
+    private func geocodeAddress() async -> (latitude: Double, longitude: Double)? {
+        let geocoder = CLGeocoder()
+        do {
+            let placemarks = try await geocoder.geocodeAddressString(appState.address)
+            if let location = placemarks.first?.location {
+                return (location.coordinate.latitude, location.coordinate.longitude)
+            }
+        } catch {
+            await MainActor.run {
+                geocodeError = "Unable to find address. Please check and try again."
+            }
+        }
+        return nil
+    }
     
     private func saveFarmInfo() {
-        guard !appState.farmName.isEmpty, !appState.farmLocation.isEmpty else { return }
+        guard !appState.farmName.isEmpty, !appState.farmLocation.isEmpty, !appState.address.isEmpty else { return }
         
         isSaving = true
+        geocodeError = nil
+        
         Task {
+            // Geocode address first
+            guard let coordinates = await geocodeAddress() else {
+                await MainActor.run {
+                    isSaving = false
+                }
+                return
+            }
+            
             do {
                 try await firestoreManager.updateFarmInfo(
                     userID: appState.userID,
                     name: appState.farmName,
-                    location: appState.farmLocation
+                    location: appState.farmLocation,
+                    address: appState.address,
+                    latitude: coordinates.latitude,
+                    longitude: coordinates.longitude
                 )
                 await MainActor.run {
+                    appState.latitude = coordinates.latitude
+                    appState.longitude = coordinates.longitude
                     isSaving = false
                     onNext()
                 }
@@ -1394,18 +1764,35 @@ struct FarmPage1: View {
             }
             .onChange(of: selectedPhoto) { item in Task { if let d = try? await item?.loadTransferable(type: Data.self), let img = UIImage(data: d) { appState.farmImage = img } } }
             Y2YInputField(label: "Farm Name", placeholder: "e.g. Sunflower Acres", text: $appState.farmName)
-            Y2YInputField(label: "Farm Location", placeholder: "e.g. 789 County Rd, Springfield", text: $appState.farmLocation)
+            Y2YInputField(label: "Farm Location", placeholder: "e.g. Springfield County", text: $appState.farmLocation)
+            Y2YInputField(label: "Street Address", placeholder: "e.g. 789 County Rd, Springfield, CA 12345", text: $appState.address)
+            
+            if let error = geocodeError {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(Color(red: 1, green: 0.5, blue: 0.45))
+                    Text(error)
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundColor(Color(red: 1, green: 0.5, blue: 0.45))
+                }
+                .padding(12)
+                .background(Color.y2yCard)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            
             Y2YButton(title: isSaving ? "Saving..." : "Next: Browse Compost", icon: "arrow.right", action: saveFarmInfo)
-                .disabled(appState.farmName.isEmpty || appState.farmLocation.isEmpty || isSaving).padding(.top, 4)
+                .disabled(appState.farmName.isEmpty || appState.farmLocation.isEmpty || appState.address.isEmpty || isSaving).padding(.top, 4)
         }
         .toolbar { LogoutToolbarItem() }
     }
 }
 struct FarmPage2: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var firestoreManager: FirestoreManager
     let onBack: () -> Void
     let onNext: () -> Void
     @State private var purchasedID: UUID? = nil
+    @State private var showMap = false
     var body: some View {
         Y2YPage(title: "Compost Marketplace", subtitle: "Buy from local composting facilities") {
             ForEach(appState.marketplaceListings) { listing in
@@ -1423,9 +1810,26 @@ struct FarmPage2: View {
                 .padding(16).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 20))
                 .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.y2yAccent.opacity(0.25), lineWidth: 1))
             }
+            // MARK: - Map CTA
+            Button(action: { showMap = true }) {
+                HStack(spacing: 8) {
+                    Text("🗺️  View Nearby Y2Y Organizations")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundColor(Color.y2yTan)
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundColor(Color.y2yAccent)
+                }
+                .padding(16).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.y2yAccent.opacity(0.25), lineWidth: 1))
+            }
             BackButton(action: onBack)
         }
         .toolbar { LogoutToolbarItem() }
+        .sheet(isPresented: $showMap) {
+            Y2YMapView()
+                .environmentObject(appState)
+                .environmentObject(firestoreManager)
+        }
     }
 }
 // MARK: - Farm: Produce Marketplace Management
@@ -1641,18 +2045,49 @@ struct FacilityPage1: View {
     @EnvironmentObject var firestoreManager: FirestoreManager
     let onNext: () -> Void
     @State private var isSaving = false
+    @State private var geocodeError: String? = nil
+    
+    private func geocodeAddress() async -> (latitude: Double, longitude: Double)? {
+        let geocoder = CLGeocoder()
+        do {
+            let placemarks = try await geocoder.geocodeAddressString(appState.address)
+            if let location = placemarks.first?.location {
+                return (location.coordinate.latitude, location.coordinate.longitude)
+            }
+        } catch {
+            await MainActor.run {
+                geocodeError = "Unable to find address. Please check and try again."
+            }
+        }
+        return nil
+    }
     
     private func saveFacilityInfo() {
-        guard !appState.facilityName.isEmpty else { return }
+        guard !appState.facilityName.isEmpty, !appState.address.isEmpty else { return }
         
         isSaving = true
+        geocodeError = nil
+        
         Task {
+            // Geocode address first
+            guard let coordinates = await geocodeAddress() else {
+                await MainActor.run {
+                    isSaving = false
+                }
+                return
+            }
+            
             do {
                 try await firestoreManager.updateFacilityInfo(
                     userID: appState.userID,
-                    name: appState.facilityName
+                    name: appState.facilityName,
+                    address: appState.address,
+                    latitude: coordinates.latitude,
+                    longitude: coordinates.longitude
                 )
                 await MainActor.run {
+                    appState.latitude = coordinates.latitude
+                    appState.longitude = coordinates.longitude
                     isSaving = false
                     onNext()
                 }
@@ -1675,19 +2110,36 @@ struct FacilityPage1: View {
             }
             .frame(maxWidth: .infinity).padding(.vertical, 8)
             Y2YInputField(label: "Facility Name", placeholder: "e.g. Green Earth Compost Co.", text: $appState.facilityName)
+            Y2YInputField(label: "Street Address", placeholder: "e.g. 456 Industrial Dr, Springfield, CA 12345", text: $appState.address)
+            
+            if let error = geocodeError {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(Color(red: 1, green: 0.5, blue: 0.45))
+                    Text(error)
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundColor(Color(red: 1, green: 0.5, blue: 0.45))
+                }
+                .padding(12)
+                .background(Color.y2yCard)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            
             Y2YButton(title: isSaving ? "Saving..." : "Continue to Dashboard", icon: "arrow.right", action: saveFacilityInfo)
-                .disabled(appState.facilityName.isEmpty || isSaving).padding(.top, 4)
+                .disabled(appState.facilityName.isEmpty || appState.address.isEmpty || isSaving).padding(.top, 4)
         }
         .toolbar { LogoutToolbarItem() }
     }
 }
 struct FacilityPage2: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var firestoreManager: FirestoreManager
     let onBack: () -> Void
     let onDispatch: () -> Void
     @State private var selectedTab = 0
     @State private var newPrice = ""
     @State private var newPounds = ""
+    @State private var showMap = false
     var body: some View {
         Y2YPage(title: appState.facilityName, subtitle: "Facility Dashboard") {
             HStack(spacing: 0) {
@@ -1725,9 +2177,26 @@ struct FacilityPage2: View {
                 }
                 .padding(18).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 24))
             }
+            // MARK: - Map CTA
+            Button(action: { showMap = true }) {
+                HStack(spacing: 8) {
+                    Text("🗺️  View Nearby Y2Y Organizations")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundColor(Color.y2yTan)
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundColor(Color.y2yAccent)
+                }
+                .padding(16).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.y2yAccent.opacity(0.25), lineWidth: 1))
+            }
             BackButton(action: onBack)
         }
         .toolbar { LogoutToolbarItem() }
+        .sheet(isPresented: $showMap) {
+            Y2YMapView()
+                .environmentObject(appState)
+                .environmentObject(firestoreManager)
+        }
     }
 }
 struct DashTabButton: View {
