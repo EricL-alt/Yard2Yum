@@ -839,7 +839,8 @@ struct RestaurantFlowView: View {
             switch currentPage {
             case 1: RestaurantPage1(onNext: { currentPage = 2 }).environmentObject(appState)
             case 2: RestaurantPage2(onBack: { currentPage = 1 }, onNext: { currentPage = 3 }).environmentObject(appState)
-            case 3: RestaurantProduceMarketplacePage(onBack: { currentPage = 2 }).environmentObject(appState)
+            case 3: RestaurantProduceMarketplacePage(onBack: { currentPage = 2 }, onDispatch: { currentPage = 4 }).environmentObject(appState)
+            case 4: CompostDispatchView(initialRole: .restaurant, onBack: { currentPage = 3 }).environmentObject(appState)
             default: RestaurantPage1(onNext: { currentPage = 2 }).environmentObject(appState)
             }
         }
@@ -1140,6 +1141,7 @@ struct RestaurantPage2: View {
 struct RestaurantProduceMarketplacePage: View {
     @EnvironmentObject var appState: AppState
     let onBack: () -> Void
+    let onDispatch: () -> Void
     @State private var purchasedIDs: Set<UUID> = []
     @State private var quantitySelections: [UUID: Double] = [:]
     var body: some View {
@@ -1191,6 +1193,18 @@ struct RestaurantProduceMarketplacePage: View {
                         ProduceOrderRow(order: order)
                     }
                 }
+            }
+            // MARK: - Track Live Dispatch CTA
+            Button(action: onDispatch) {
+                HStack(spacing: 8) {
+                    Text("🚚  Track Live Compost Dispatch")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundColor(Color.y2yTan)
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundColor(Color.y2yAccent)
+                }
+                .padding(16).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.y2yAccent.opacity(0.25), lineWidth: 1))
             }
             BackButton(action: onBack)
         }
@@ -1325,7 +1339,8 @@ struct FarmFlowView: View {
             switch currentPage {
             case 1: FarmPage1(onNext: { currentPage = 2 }).environmentObject(appState)
             case 2: FarmPage2(onBack: { currentPage = 1 }, onNext: { currentPage = 3 }).environmentObject(appState)
-            case 3: FarmProduceMarketplacePage(onBack: { currentPage = 2 }).environmentObject(appState)
+            case 3: FarmProduceMarketplacePage(onBack: { currentPage = 2 }, onDispatch: { currentPage = 4 }).environmentObject(appState)
+            case 4: CompostDispatchView(initialRole: .farm, onBack: { currentPage = 3 }).environmentObject(appState)
             default: FarmPage1(onNext: { currentPage = 2 }).environmentObject(appState)
             }
         }
@@ -1417,6 +1432,7 @@ struct FarmPage2: View {
 struct FarmProduceMarketplacePage: View {
     @EnvironmentObject var appState: AppState
     let onBack: () -> Void
+    let onDispatch: () -> Void
     @State private var newProduce    = ""
     @State private var newEmoji      = ""
     @State private var newPrice      = ""
@@ -1542,6 +1558,18 @@ struct FarmProduceMarketplacePage: View {
                 .disabled(newProduce.isEmpty || newPrice.isEmpty || newUnits.isEmpty)
             }
             .padding(18).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 24))
+            // MARK: - Track Live Dispatch CTA
+            Button(action: onDispatch) {
+                HStack(spacing: 8) {
+                    Text("🚚  Track Live Compost Dispatch")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundColor(Color.y2yTan)
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundColor(Color.y2yAccent)
+                }
+                .padding(16).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.y2yAccent.opacity(0.25), lineWidth: 1))
+            }
             BackButton(action: onBack)
         }
         .toolbar { LogoutToolbarItem() }
@@ -1599,8 +1627,12 @@ struct CompostFacilityFlowView: View {
     @State private var currentPage = 1
     var body: some View {
         NavigationStack {
-            if currentPage == 1 { FacilityPage1(onNext: { currentPage = 2 }).environmentObject(appState) }
-            else { FacilityPage2(onBack: { currentPage = 1 }).environmentObject(appState) }
+            switch currentPage {
+            case 1: FacilityPage1(onNext: { currentPage = 2 }).environmentObject(appState)
+            case 2: FacilityPage2(onBack: { currentPage = 1 }, onDispatch: { currentPage = 3 }).environmentObject(appState)
+            case 3: CompostDispatchView(initialRole: .hub, onBack: { currentPage = 2 }).environmentObject(appState)
+            default: FacilityPage1(onNext: { currentPage = 2 }).environmentObject(appState)
+            }
         }
     }
 }
@@ -1652,6 +1684,7 @@ struct FacilityPage1: View {
 struct FacilityPage2: View {
     @EnvironmentObject var appState: AppState
     let onBack: () -> Void
+    let onDispatch: () -> Void
     @State private var selectedTab = 0
     @State private var newPrice = ""
     @State private var newPounds = ""
@@ -1662,6 +1695,18 @@ struct FacilityPage2: View {
                 DashTabButton(title: "Marketplace",  isSelected: selectedTab == 1) { selectedTab = 1 }
             }
             .background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 20))
+            // MARK: - Track Live Dispatch CTA
+            Button(action: onDispatch) {
+                HStack(spacing: 8) {
+                    Text("🚚  Open Live Dispatch Board")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundColor(Color.y2yTan)
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundColor(Color.y2yAccent)
+                }
+                .padding(16).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.y2yAccent.opacity(0.25), lineWidth: 1))
+            }
             if selectedTab == 0 {
                 ForEach(appState.pickupRequests) { PickupRequestCard(request: $0) }
             } else {
