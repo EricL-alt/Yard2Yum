@@ -1,0 +1,9 @@
+# CocoaPods — regenerate with `pod install`; keep Podfile + Podfile.lock in git
+Pods/
+
+# Xcode user state and build output
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
