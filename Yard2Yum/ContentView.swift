@@ -56,6 +56,8 @@ struct ProduceListing: Identifiable {
     var availableUnits: Double
     var unit: String        // e.g. "lb", "bunch", "each"
     var produceEmoji: String
+    var produceImage: UIImage? = nil
+    var freshScore: Double? = nil   // Fresh Confidence Score from the on-device classifier
 }
 // MARK: - New: Produce Order (restaurant buys produce)
 struct ProduceOrder: Identifiable {
@@ -1625,10 +1627,16 @@ struct ProduceListingCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
-                Text(listing.produceEmoji).font(.system(size: 36))
-                    .frame(width: 56, height: 56)
-                    .background(Color.y2yBackground.opacity(0.6))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                if let img = listing.produceImage {
+                    Image(uiImage: img).resizable().scaledToFill()
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                } else {
+                    Text(listing.produceEmoji).font(.system(size: 36))
+                        .frame(width: 56, height: 56)
+                        .background(Color.y2yBackground.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(listing.produceName)
                         .font(.system(size: 16, weight: .bold, design: .rounded)).foregroundColor(Color.y2yTan)
@@ -1636,6 +1644,9 @@ struct ProduceListingCard: View {
                         .font(.system(size: 12, design: .rounded)).foregroundColor(Color.y2yAccent)
                     Text("\(Int(listing.availableUnits)) \(listing.unit)s available")
                         .font(.system(size: 11, design: .rounded)).foregroundColor(Color.y2ySubtext)
+                    if let score = listing.freshScore {
+                        FreshnessBadge(score: score)
+                    }
                 }
                 Spacer()
                 Text(String(format: "$%.2f/\(listing.unit)", listing.pricePerUnit))
@@ -1909,6 +1920,12 @@ struct FarmProduceMarketplacePage: View {
     @State private var newUnits      = ""
     @State private var newUnit       = "lb"
     @State private var showSuccess   = false
+    @State private var newPhotoItem: PhotosPickerItem? = nil
+    @State private var newImage: UIImage? = nil
+    @State private var newFreshScore: Double? = nil
+    @State private var isClassifying = false
+    @State private var classifierUnavailable = false
+    @State private var postError: String? = nil
     let unitOptions = ["lb", "bunch", "each", "oz", "flat", "bag"]
     let emojiOptions = ["🍅","🥕","🥬","🌽","🥦","🍓","🫑","🧅","🌿","🍠","🥒","🫛"]
     var myListings: [ProduceListing] {
@@ -1966,6 +1983,81 @@ struct FarmProduceMarketplacePage: View {
                 Text("ADD NEW LISTING")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundColor(Color.y2ySubtext.opacity(0.65))
+                // MARK: Produce photo (required) + freshness check
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Produce Photo (required)").font(.system(size: 12, weight: .bold, design: .rounded)).foregroundColor(Color.y2ySubtext)
+                    PhotosPicker(selection: $newPhotoItem, matching: .images) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 20).fill(Color.y2yBackground.opacity(0.5)).frame(height: 150)
+                            if let img = newImage {
+                                Image(uiImage: img).resizable().scaledToFill()
+                                    .frame(height: 150)
+                                    .frame(maxWidth: .infinity)
+                                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                            } else {
+                                VStack(spacing: 8) {
+                                    Image(systemName: "camera.badge.ellipsis").font(.system(size: 30)).foregroundColor(Color.y2yAccent)
+                                    Text("Add a photo of this produce\nfor its freshness check")
+                                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                                        .foregroundColor(Color.y2ySubtext)
+                                        .multilineTextAlignment(.center)
+                                }
+                            }
+                        }
+                        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    }
+                    .onChange(of: newPhotoItem) { item in
+                        Task {
+                            guard let d = try? await item?.loadTransferable(type: Data.self),
+                                  let img = UIImage(data: d) else { return }
+                            newImage = img
+                            newFreshScore = nil
+                            postError = nil
+                            classifierUnavailable = false
+                            isClassifying = true
+                            let score = await FreshnessClassifier.classifyInBackground(image: img)
+                            withAnimation(.spring(response: 0.4)) {
+                                newFreshScore = score
+                                classifierUnavailable = (score == nil)
+                                isClassifying = false
+                            }
+                        }
+                    }
+                    if isClassifying {
+                        HStack(spacing: 8) {
+                            ProgressView().progressViewStyle(CircularProgressViewStyle(tint: Color.y2yAccent))
+                            Text("Checking freshness...")
+                                .font(.system(size: 12, design: .rounded)).foregroundColor(Color.y2ySubtext)
+                        }
+                    } else if let score = newFreshScore {
+                        let category = FreshnessCategory(score: score)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("FRESH CONFIDENCE SCORE")
+                                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                                    .foregroundColor(Color.y2ySubtext.opacity(0.7))
+                                Spacer()
+                                FreshnessBadge(score: score)
+                            }
+                            Text(String(format: "%.4f", score))
+                                .font(Font.custom("Georgia-Bold", size: 24))
+                                .foregroundColor(category.color)
+                            Text("Range \(category.rangeText) · \(category.colorName) (\(category.title))")
+                                .font(.system(size: 11, design: .rounded))
+                                .foregroundColor(Color.y2ySubtext)
+                        }
+                        .padding(14)
+                        .background(Color.y2yBackground.opacity(0.4))
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(category.color.opacity(0.4), lineWidth: 1.5))
+                    } else if classifierUnavailable && newImage != nil {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundColor(Color(red: 0.94, green: 0.85, blue: 0.54))
+                            Text("Freshness check unavailable — the listing will post without a score.")
+                                .font(.system(size: 12, design: .rounded)).foregroundColor(Color.y2ySubtext)
+                        }
+                    }
+                }
                 // Emoji picker
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Produce Icon").font(.system(size: 12, weight: .bold, design: .rounded)).foregroundColor(Color.y2ySubtext)
@@ -2007,8 +2099,22 @@ struct FarmProduceMarketplacePage: View {
                     .padding(12).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 14))
                     .transition(.opacity)
                 }
+                if let postError = postError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "xmark.octagon.fill").foregroundColor(Color(red: 0.95, green: 0.35, blue: 0.30))
+                        Text(postError)
+                            .font(.system(size: 12, design: .rounded)).foregroundColor(Color.y2yTan)
+                    }
+                    .padding(12).background(Color(red: 0.95, green: 0.35, blue: 0.30).opacity(0.12)).clipShape(RoundedRectangle(cornerRadius: 14))
+                }
                 Y2YButton(title: "Post Listing", icon: "plus.circle.fill") {
-                    guard let price = Double(newPrice), let qty = Double(newUnits), !newProduce.isEmpty else { return }
+                    guard let price = Double(newPrice), let qty = Double(newUnits), !newProduce.isEmpty,
+                          let image = newImage else { return }
+                    // Quality gate: High Risk produce can't be listed.
+                    if let score = newFreshScore, FreshnessCategory(score: score) == .red {
+                        withAnimation { postError = "This photo scored \(String(format: "%.4f", score)) — Red (High Risk). Please retake the photo or list fresher produce." }
+                        return
+                    }
                     withAnimation(.spring(response: 0.4)) {
                         appState.produceListings.append(ProduceListing(
                             farmName: appState.farmName,
@@ -2016,16 +2122,20 @@ struct FarmProduceMarketplacePage: View {
                             pricePerUnit: price,
                             availableUnits: qty,
                             unit: newUnit,
-                            produceEmoji: newEmoji.isEmpty ? "🌿" : newEmoji
+                            produceEmoji: newEmoji.isEmpty ? "🌿" : newEmoji,
+                            produceImage: image,
+                            freshScore: newFreshScore
                         ))
                         newProduce = ""; newPrice = ""; newUnits = ""; newEmoji = ""
+                        newPhotoItem = nil; newImage = nil; newFreshScore = nil
+                        classifierUnavailable = false; postError = nil
                         showSuccess = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                             withAnimation { showSuccess = false }
                         }
                     }
                 }
-                .disabled(newProduce.isEmpty || newPrice.isEmpty || newUnits.isEmpty)
+                .disabled(newProduce.isEmpty || newPrice.isEmpty || newUnits.isEmpty || newImage == nil || isClassifying)
             }
             .padding(18).background(Color.y2yCard).clipShape(RoundedRectangle(cornerRadius: 24))
             // MARK: - Track Live Dispatch CTA
@@ -2050,14 +2160,23 @@ struct FarmProduceListingCard: View {
     let onDelete: () -> Void
     var body: some View {
         HStack(spacing: 14) {
-            Text(listing.produceEmoji).font(.system(size: 26))
-                .frame(width: 48, height: 48)
-                .background(Color.y2yBackground.opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+            if let img = listing.produceImage {
+                Image(uiImage: img).resizable().scaledToFill()
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else {
+                Text(listing.produceEmoji).font(.system(size: 26))
+                    .frame(width: 48, height: 48)
+                    .background(Color.y2yBackground.opacity(0.6))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(listing.produceName).font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundColor(Color.y2yTan)
                 Text("\(Int(listing.availableUnits)) \(listing.unit)s · \(String(format: "$%.2f/\(listing.unit)", listing.pricePerUnit))")
                     .font(.system(size: 12, design: .rounded)).foregroundColor(Color.y2ySubtext)
+                if let score = listing.freshScore {
+                    FreshnessBadge(score: score, compact: true)
+                }
             }
             Spacer()
             Button(action: onDelete) {
