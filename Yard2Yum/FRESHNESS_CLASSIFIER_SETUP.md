@@ -36,12 +36,12 @@ From then on, open **`Yard2Yum.xcworkspace`** (not the `.xcodeproj`) —
 CocoaPods generates the workspace, and the existing Firebase Swift-Package
 dependencies keep working alongside it.
 
-### 2. Add the model to the app bundle
+### 2. Model file — already in the repo ✅
 
-Drag `fresh_rotten_fruit_classifier.tflite` into the Xcode project navigator
-(into the `Yard2Yum` folder). Check **"Copy items if needed"** and make sure
-the **Yard2Yum target** is ticked. The file is not in the git repo yet — once
-you add it, commit it so everyone has it.
+`fresh_rotten_fruit_classifier.tflite` lives in `Yard2Yum/` and is committed
+to git. Because the project uses Xcode 16 folder-synchronized groups, the file
+is bundled into the app automatically — no drag-into-Xcode step is needed.
+Just `git pull` and build.
 
 ### 3. Build and run
 
