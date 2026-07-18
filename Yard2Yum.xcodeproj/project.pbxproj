@@ -10,6 +10,7 @@
 		603D8F9C27C5D6E9F61A8BE1 /* Pods_Yard2Yum.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DBE02CAFAB4993A8D908AF39 /* Pods_Yard2Yum.framework */; };
 		A2315877300C0354003B189B /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = A2315876300C0354003B189B /* FirebaseAuth */; };
 		A2315879300C0354003B189B /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = A2315878300C0354003B189B /* FirebaseFirestore */; };
+		A2382252300C22670023CD41 /* Typesense in Frameworks */ = {isa = PBXBuildFile; productRef = A2382251300C22670023CD41 /* Typesense */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +34,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				603D8F9C27C5D6E9F61A8BE1 /* Pods_Yard2Yum.framework in Frameworks */,
+				A2382252300C22670023CD41 /* Typesense in Frameworks */,
 				A2315877300C0354003B189B /* FirebaseAuth in Frameworks */,
 				A2315879300C0354003B189B /* FirebaseFirestore in Frameworks */,
 			);
@@ -100,6 +102,7 @@
 			packageProductDependencies = (
 				A2315876300C0354003B189B /* FirebaseAuth */,
 				A2315878300C0354003B189B /* FirebaseFirestore */,
+				A2382251300C22670023CD41 /* Typesense */,
 			);
 			productName = Yard2Yum;
 			productReference = A26DE2F82F5E3B6100858919 /* Yard2Yum.app */;
@@ -131,6 +134,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A2315875300C0354003B189B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				A2382250300C22670023CD41 /* XCRemoteSwiftPackageReference "typesense-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A26DE2F92F5E3B6100858919 /* Products */;
@@ -443,6 +447,14 @@
 				minimumVersion = 12.16.0;
 			};
 		};
+		A2382250300C22670023CD41 /* XCRemoteSwiftPackageReference "typesense-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/typesense/typesense-swift";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -455,6 +467,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A2315875300C0354003B189B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseFirestore;
+		};
+		A2382251300C22670023CD41 /* Typesense */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A2382250300C22670023CD41 /* XCRemoteSwiftPackageReference "typesense-swift" */;
+			productName = Typesense;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

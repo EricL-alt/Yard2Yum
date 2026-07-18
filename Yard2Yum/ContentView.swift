@@ -934,10 +934,31 @@ struct OrganizationAnnotation: Identifiable {
         CLLocationCoordinate2D(latitude: profile.latitude ?? 0, longitude: profile.longitude ?? 0)
     }
     var name: String {
-        profile.restaurantName ?? profile.farmName ?? profile.facilityName ?? "Unknown"
+        getOrganizationName(from: profile)
     }
     var userType: UserType? {
         UserType.allCases.first { $0.rawValue == profile.userType }
+    }
+    
+    // Helper function to get organization name based on type
+    private func getOrganizationName(from profile: UserProfile) -> String {
+        switch profile.userType {
+        case "Restaurant":
+            if let name = profile.restaurantName, !name.isEmpty {
+                return name
+            }
+        case "Farm":
+            if let name = profile.farmName, !name.isEmpty {
+                return name
+            }
+        case "Composting Facility":
+            if let name = profile.facilityName, !name.isEmpty {
+                return name
+            }
+        default:
+            break
+        }
+        return "Unknown Organization"
     }
 }
 
@@ -994,7 +1015,19 @@ struct Y2YMapView: View {
             latitude: org.latitude ?? 0,
             longitude: org.longitude ?? 0
         )
-        let name = org.restaurantName ?? org.farmName ?? org.facilityName ?? "Organization"
+        
+        // Get organization name using switch statement
+        let name: String
+        switch org.userType {
+        case "Restaurant":
+            name = (org.restaurantName?.isEmpty == false) ? org.restaurantName! : "Restaurant"
+        case "Farm":
+            name = (org.farmName?.isEmpty == false) ? org.farmName! : "Farm"
+        case "Composting Facility":
+            name = (org.facilityName?.isEmpty == false) ? org.facilityName! : "Composting Facility"
+        default:
+            name = "Organization"
+        }
         
         return Annotation(name, coordinate: coordinate) {
             MapPinView(userType: UserType.allCases.first { $0.rawValue == org.userType })
@@ -1111,7 +1144,23 @@ struct OrganizationDetailCard: View {
     }
     
     var name: String {
-        profile.restaurantName ?? profile.farmName ?? profile.facilityName ?? "Unknown"
+        switch profile.userType {
+        case "Restaurant":
+            if let restaurantName = profile.restaurantName, !restaurantName.isEmpty {
+                return restaurantName
+            }
+        case "Farm":
+            if let farmName = profile.farmName, !farmName.isEmpty {
+                return farmName
+            }
+        case "Composting Facility":
+            if let facilityName = profile.facilityName, !facilityName.isEmpty {
+                return facilityName
+            }
+        default:
+            break
+        }
+        return "Unknown Organization"
     }
     
     var body: some View {
@@ -1525,7 +1574,7 @@ struct RestaurantPage2: View {
             // MARK: - Map CTA
             Button(action: { showMap = true }) {
                 HStack(spacing: 8) {
-                    Text("🗺️  View Nearby Y2Y Organizations")
+                    Text("🔍  Find Nearby Y2Y Organizations")
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .foregroundColor(Color.y2yTan)
                     Spacer()
@@ -1538,7 +1587,7 @@ struct RestaurantPage2: View {
         }
         .toolbar { LogoutToolbarItem() }
         .sheet(isPresented: $showMap) {
-            Y2YMapView()
+            NearbyOrganizationsView()
                 .environmentObject(appState)
                 .environmentObject(firestoreManager)
         }
@@ -1890,7 +1939,7 @@ struct FarmPage2: View {
             // MARK: - Map CTA
             Button(action: { showMap = true }) {
                 HStack(spacing: 8) {
-                    Text("🗺️  View Nearby Y2Y Organizations")
+                    Text("🔍  Find Nearby Y2Y Organizations")
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .foregroundColor(Color.y2yTan)
                     Spacer()
@@ -1903,7 +1952,7 @@ struct FarmPage2: View {
         }
         .toolbar { LogoutToolbarItem() }
         .sheet(isPresented: $showMap) {
-            Y2YMapView()
+            NearbyOrganizationsView()
                 .environmentObject(appState)
                 .environmentObject(firestoreManager)
         }
@@ -2365,7 +2414,7 @@ struct FacilityPage2: View {
             // MARK: - Map CTA
             Button(action: { showMap = true }) {
                 HStack(spacing: 8) {
-                    Text("🗺️  View Nearby Y2Y Organizations")
+                    Text("🔍  Find Nearby Y2Y Organizations")
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .foregroundColor(Color.y2yTan)
                     Spacer()
@@ -2378,7 +2427,7 @@ struct FacilityPage2: View {
         }
         .toolbar { LogoutToolbarItem() }
         .sheet(isPresented: $showMap) {
-            Y2YMapView()
+            NearbyOrganizationsView()
                 .environmentObject(appState)
                 .environmentObject(firestoreManager)
         }
