@@ -11,9 +11,9 @@
 
 import SwiftUI
 import UIKit
-#if canImport(TensorFlowLite)
+
+// Force import TensorFlowLite - if this fails, the pod isn't properly installed
 import TensorFlowLite
-#endif
 
 // MARK: - Fresh Confidence Score Categories
 //
@@ -87,63 +87,151 @@ final class FreshnessClassifier {
         }.value
     }
 
-#if canImport(TensorFlowLite)
     private let interpreter: Interpreter
 
     init?() {
+        // Debug: List all files in the bundle to see what's actually there
+        if let resourcePath = Bundle.main.resourcePath {
+            print("FreshnessClassifier: Bundle resource path: \(resourcePath)")
+            do {
+                let contents = try FileManager.default.contentsOfDirectory(atPath: resourcePath)
+                let tfliteFiles = contents.filter { $0.hasSuffix(".tflite") }
+                print("FreshnessClassifier: .tflite files in bundle: \(tfliteFiles)")
+                if tfliteFiles.isEmpty {
+                    print("FreshnessClassifier: No .tflite files found. All files: \(contents.prefix(20))")
+                }
+            } catch {
+                print("FreshnessClassifier: Error listing bundle contents: \(error)")
+            }
+        }
+        
         guard let modelPath = Bundle.main.path(forResource: Self.modelName, ofType: "tflite") else {
             print("FreshnessClassifier: \(Self.modelName).tflite not found in bundle.")
+            print("FreshnessClassifier: Searched in: \(Bundle.main.bundlePath)")
+            
+            // Try alternative search methods
+            if let url = Bundle.main.url(forResource: Self.modelName, withExtension: "tflite") {
+                print("FreshnessClassifier: Found via URL method: \(url)")
+            }
+            
             return nil
         }
+        print("FreshnessClassifier: Found model at: \(modelPath)")
+        
         do {
-            interpreter = try Interpreter(modelPath: modelPath)
+            // Create interpreter with proper configuration
+            var options = Interpreter.Options()
+            options.threadCount = 2
+            interpreter = try Interpreter(modelPath: modelPath, options: options)
+            
+            // Allocate tensors
             try interpreter.allocateTensors()
+            print("FreshnessClassifier: Tensors allocated successfully")
+            
+            // Log model details - do this AFTER allocating tensors
+            do {
+                let inputTensor = try interpreter.input(at: 0)
+                print("FreshnessClassifier: Model loaded successfully!")
+                print("  Input shape: \(inputTensor.shape.dimensions)")
+                print("  Input data type: \(inputTensor.dataType)")
+                
+                // Note: We can't access output tensor details until after first invoke
+                print("  Model is ready for inference")
+            } catch {
+                print("FreshnessClassifier: Warning - could not read tensor details: \(error.localizedDescription)")
+                // Continue anyway - the interpreter is still valid
+            }
         } catch {
             print("FreshnessClassifier: failed to create interpreter: \(error.localizedDescription)")
+            print("FreshnessClassifier: Error details: \(error)")
             return nil
         }
     }
 
     func freshConfidenceScore(for image: UIImage) -> Double? {
         do {
-            let inputShape = try interpreter.input(at: 0).shape.dimensions
+            let inputTensor = try interpreter.input(at: 0)
+            let inputShape = inputTensor.shape.dimensions
+            
             // Expected shape: [1, height, width, 3]
-            let height = inputShape.count > 2 ? inputShape[1] : 128
-            let width  = inputShape.count > 2 ? inputShape[2] : 128
+            let height = inputShape.count > 1 ? Int(inputShape[1]) : 128
+            let width  = inputShape.count > 2 ? Int(inputShape[2]) : 128
+
+            print("FreshnessClassifier: Input shape: \(inputShape), using \(width)x\(height)")
 
             guard let inputData = Self.rgbFloatData(from: image, width: width, height: height) else {
                 print("FreshnessClassifier: failed to preprocess image.")
                 return nil
             }
 
+            print("FreshnessClassifier: Input data size: \(inputData.count) bytes")
+            print("FreshnessClassifier: Expected size: \(width * height * 3 * 4) bytes (Float32)")
+
+            // Copy input data
             try interpreter.copy(inputData, toInputAt: 0)
+            
+            // Run inference
             try interpreter.invoke()
+            print("FreshnessClassifier: Inference completed successfully")
 
+            // Get output
             let outputTensor = try interpreter.output(at: 0)
+            let outputShape = outputTensor.shape.dimensions
+            print("FreshnessClassifier: Output shape: \(outputShape)")
+            print("FreshnessClassifier: Output data size: \(outputTensor.data.count) bytes")
+            
+            // The output shape is [1, 2] meaning batch_size=1, num_classes=2
+            // The data is stored as a flat array, so we can access it directly
             let probabilities = outputTensor.data.toArray(type: Float32.self)
-            guard !probabilities.isEmpty else { return nil }
-
-            // Class order matches training labels ["fresh", "rotten"]: with two
-            // outputs index 0 is the "fresh" probability; a single sigmoid
-            // output is already the fresh confidence.
-            let score = Double(probabilities[0])
-            return min(max(score, 0.0), 1.0)
+            print("FreshnessClassifier: Output probabilities (raw): \(probabilities)")
+            print("FreshnessClassifier: Number of values: \(probabilities.count)")
+            
+            // For shape [1, 2], the flat array contains [class0, class1]
+            // where class0 = rotten, class1 = fresh (based on testing)
+            guard probabilities.count >= 2 else {
+                print("FreshnessClassifier: Expected 2 probabilities but got \(probabilities.count)")
+                return nil
+            }
+            
+            // Extract the two class probabilities
+            let rottenProb = probabilities[0]
+            let freshProb = probabilities[1]
+            
+            print("FreshnessClassifier: Rotten probability: \(rottenProb)")
+            print("FreshnessClassifier: Fresh probability: \(freshProb)")
+            
+            // Verify they sum to ~1.0 (softmax output)
+            let sum = rottenProb + freshProb
+            print("FreshnessClassifier: Sum of probabilities: \(sum)")
+            
+            // Use the fresh probability as the score
+            let score = Double(freshProb)
+            print("FreshnessClassifier: Using fresh probability as score: \(score)")
+            
+            let clampedScore = min(max(score, 0.0), 1.0)
+            print("FreshnessClassifier: Final clamped score: \(clampedScore)")
+            return clampedScore
         } catch {
             print("FreshnessClassifier: inference failed: \(error.localizedDescription)")
+            print("FreshnessClassifier: Error details: \(error)")
             return nil
         }
     }
-#else
-    // TensorFlowLite pod not installed — classifier unavailable.
-    init?() { return nil }
-    func freshConfidenceScore(for image: UIImage) -> Double? { nil }
-#endif
 
     /// Draws the image into a width×height RGBA context (resizing it in the
     /// process), then packs normalized [0, 1] Float32 RGB values in row-major
     /// order — matching the model's training preprocessing.
     static func rgbFloatData(from image: UIImage, width: Int, height: Int) -> Data? {
-        guard let cgImage = image.cgImage, width > 0, height > 0 else { return nil }
+        guard let cgImage = image.cgImage, width > 0, height > 0 else {
+            print("FreshnessClassifier: Invalid image or dimensions")
+            return nil
+        }
+        
+        // Log original image size vs target size
+        let originalSize = image.size
+        print("FreshnessClassifier: Original image size: \(originalSize.width)×\(originalSize.height)")
+        print("FreshnessClassifier: Resizing to: \(width)×\(height)")
+        
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * width
         var rawBytes = [UInt8](repeating: 0, count: height * bytesPerRow)
@@ -155,20 +243,41 @@ final class FreshnessClassifier {
             bytesPerRow: bytesPerRow,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
+        ) else {
+            print("FreshnessClassifier: Failed to create CGContext")
+            return nil
+        }
+        
         context.interpolationQuality = .high
+        // This draw call automatically resizes the image to fit the 128×128 context
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        print("FreshnessClassifier: Image resized and drawn into context")
 
         var floats = [Float32]()
         floats.reserveCapacity(width * height * 3)
+        
+        // Check first few pixels to verify we have valid data
+        var sampleSum: Float32 = 0
+        
         for row in 0..<height {
             for col in 0..<width {
                 let offset = row * bytesPerRow + col * bytesPerPixel
-                floats.append(Float32(rawBytes[offset])     / 255.0)
-                floats.append(Float32(rawBytes[offset + 1]) / 255.0)
-                floats.append(Float32(rawBytes[offset + 2]) / 255.0)
+                let r = Float32(rawBytes[offset])     / 255.0
+                let g = Float32(rawBytes[offset + 1]) / 255.0
+                let b = Float32(rawBytes[offset + 2]) / 255.0
+                
+                floats.append(r)
+                floats.append(g)
+                floats.append(b)
+                
+                if row == 0 && col < 3 {
+                    sampleSum += r + g + b
+                }
             }
         }
+        
+        print("FreshnessClassifier: Preprocessed \(floats.count) values, sample sum: \(sampleSum)")
+        
         return floats.withUnsafeBufferPointer { Data(buffer: $0) }
     }
 }
